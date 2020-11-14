@@ -43,6 +43,8 @@ static uint8_t CRC_check(uint8_t *pData, uint32_t len, uint32_t crc_host);
 static uint16_t get_mcu_chip_id(void);
 static uint8_t get_flash_rpd(void);
 static uint8_t verify_address(uint32_t address);
+static uint8_t flash_erase_sectors(uint8_t first_sector, uint8_t num_of_sectors);
+static uint8_t flash_mass_erase(void);
 
 int main(void)
 {
@@ -222,6 +224,8 @@ void bootloader_uart_read_data(void)
 {
 	uint8_t rcv_len = 0;
 	HAL_StatusTypeDef status;
+
+	printmsg("BL_DEBUG_MSG: content of %#x: %#x\r\n", (FLASH_SECTOR2_BASE_ADDRESS + 4), *((uint32_t *)(FLASH_SECTOR2_BASE_ADDRESS + 4)));
 
 	/* Read commands from serial port */
 	while(1){
@@ -453,10 +457,145 @@ static uint8_t verify_address(uint32_t address)
 		return ADDR_INVALID;
 }
 
+#define USE_FLASH_DRIVER
 void bl_flash_erase_cmd(uint8_t *pBuf)
 {
+	uint8_t first_sector;
+	uint8_t num_of_sectors;
+	uint8_t status = 0;
 
+	printmsg("BL_DEBUG_MSG: bl_flash_erase_cmd\r\n");
+
+	// Check CRC
+	if(!bl_command_CRC_check(pBuf)){
+		// CRC OK
+		printmsg("BL_DEBUG_MSG: CRC verification OK.\r\n");
+		bl_send_ACK(1);
+
+		first_sector = pBuf[2];
+		num_of_sectors = pBuf[3];
+
+		HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
+		if(first_sector == 0xff)
+			status = flash_mass_erase();
+		else
+			status = flash_erase_sectors(first_sector, num_of_sectors);
+		HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+
+		bl_uart_write_data(&status, 1);
+	}else{
+		// CRC corrupted
+		printmsg("BL_DEBUG_MSG: CRC verification failed.\r\n");
+		bl_send_NACK();
+	}
 }
+
+static uint8_t flash_erase_sectors(uint8_t first_sector, uint8_t num_of_sectors)
+{
+
+	uint8_t status = 0;
+
+	/*
+	 * STM32F446RE MCU has 8 sectors (sector 0 to 7)
+	 * first_sector has to be in the range of 0 to 7
+	 */
+
+	if(first_sector > 7){
+		printmsg("BL_DEBUG_MSG: Invalid sector (%d)\r\n", first_sector);
+		return 1;
+	}
+
+	if(num_of_sectors == 0){
+		printmsg("BL_DEBUG_MSG: Invalid number of sectors (%d)\r\n", num_of_sectors);
+		return 1;
+	}
+
+	if(num_of_sectors > 8 - first_sector)
+		num_of_sectors = 8 - first_sector;
+
+	printmsg("BL_DEBUG_MSG: Erasing %d sector(s) starting from sector %d\r\n", num_of_sectors, first_sector);
+
+	/************* Sector(s) erase **************/
+#ifdef USE_FLASH_DRIVER
+	uint32_t SectorError;
+	FLASH_EraseInitTypeDef flash_erase_conf;
+
+	flash_erase_conf.Sector = first_sector;
+	flash_erase_conf.NbSectors = num_of_sectors;
+	flash_erase_conf.VoltageRange = FLASH_VOLTAGE_RANGE_3;
+	flash_erase_conf.TypeErase = FLASH_TYPEERASE_SECTORS;
+	flash_erase_conf.Banks = FLASH_BANK_1;
+
+	HAL_FLASH_Unlock();
+	status = (uint8_t)HAL_FLASHEx_Erase(&flash_erase_conf, &SectorError);
+	HAL_FLASH_Lock();
+	printmsg("BL_DEBUG_MSG: Flash driver sector(s) erase status: %#x\r\n", SectorError);
+#else
+	/********* Unlock Flash sequence ********/
+	// 1. Write KEY1 = 0x45670123 in the Flash key register (FLASH_KEYR)
+	FLASH->KEYR = 0x45670123;
+	// 2. Write KEY2 = 0xCDEF89AB in the Flash key register (FLASH_KEYR)
+	FLASH->KEYR = 0xCDEF89AB;
+	for(uint8_t i = 0; i < num_of_sectors; i++){
+		// 1. Check that no flash memory operation is ongoing by checking the BSY bit in the FLASH_SR register
+		while(FLASH->SR & FLASH_SR_BSY);
+		// 2. Set the SER bit and select the sector out of the 7 sectors in the main memory block you
+		//	  wish to erase (SNB) in the FLASH_CR register
+		uint32_t tempreg = 0;
+		tempreg |= FLASH_CR_SER | ((first_sector + i) << FLASH_CR_SNB_Pos);
+		FLASH->CR |= tempreg;
+		// 3. Set the STRT bit in the FLASH_CR register
+		FLASH->CR |= FLASH_CR_STRT;
+		// 4. Wait for the BSY bit to be cleared
+		while(FLASH->SR & FLASH_SR_BSY);
+	}
+	/************* Lock flash **************/
+	// Lock the flash again: The FLASH_CR register can be locked again by software by setting the LOCK bit in the FLASH_CR register.
+	FLASH->CR |= FLASH_CR_LOCK;
+#endif
+
+	return status;
+}
+static uint8_t flash_mass_erase(void)
+{
+	uint8_t status = 0;
+
+	/************* Mass erase: erase complete flash **************/
+#ifdef USE_FLASH_DRIVER
+	uint32_t SectorError;
+	FLASH_EraseInitTypeDef flash_erase_conf;
+	flash_erase_conf.VoltageRange = FLASH_VOLTAGE_RANGE_3;
+	flash_erase_conf.TypeErase = FLASH_TYPEERASE_MASSERASE;
+	flash_erase_conf.Banks = FLASH_BANK_1;
+
+	HAL_FLASH_Unlock();
+	status = (uint8_t)HAL_FLASHEx_Erase(&flash_erase_conf, &SectorError);
+	HAL_FLASH_Lock();
+
+	printmsg("BL_DEBUG_MSG: Flash driver mass erase status: %#x\r\n", SectorError);
+#else
+	/********* Unlock Flash sequence ********/
+	// 1. Write KEY1 = 0x45670123 in the Flash key register (FLASH_KEYR)
+	FLASH->KEYR = 0x45670123;
+	// 2. Write KEY2 = 0xCDEF89AB in the Flash key register (FLASH_KEYR)
+	FLASH->KEYR = 0xCDEF89AB;
+	/********* Mass erase ********/
+	// 1. Check that no flash memory operation is ongoing by checking the BSY bit in the FLASH_SR register
+	while(FLASH->SR & FLASH_SR_BSY);
+	// 2. Set the MER bit in the FLASH_CR register
+	FLASH->CR |= FLASH_CR_MER;
+	// 3. Set the STRT bit in the FLASH_CR register
+	FLASH->CR |= FLASH_CR_STRT;
+	// 4. Wait for the BSY bit to be cleared
+	while(FLASH->SR & FLASH_SR_BSY);
+	/************* Lock flash **************/
+	// Lock the flash again: The FLASH_CR register can be locked again by software by setting the LOCK bit in the FLASH_CR register.
+	FLASH->CR |= FLASH_CR_LOCK;
+#endif
+
+		return status;
+}
+
 void bl_mem_write_cmd(uint8_t *pBuf)
 {
 
@@ -557,8 +696,6 @@ void bl_send_NACK(void)
  * Here we are assuming FLASH_SECTOR2_BASE_ADDRESS is
  * where the user application is stored
  */
-#define FLASH_SECTOR2_BASE_ADDRESS 		0x08008000U
-
 void bootloader_jump_to_user_app(void)
 {
 	// function pointer to hold the address of the reset handler of the user app

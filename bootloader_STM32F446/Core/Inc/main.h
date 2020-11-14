@@ -23,6 +23,8 @@ extern "C" {
 //#define SWO_Pin GPIO_PIN_3
 //#define SWO_GPIO_Port GPIOB
 
+#define FLASH_SECTOR2_BASE_ADDRESS 		0x08008000U
+
 // version 1.0
 #define BL_VERSION	0x10
 
