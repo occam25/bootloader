@@ -48,6 +48,7 @@ static uint8_t flash_erase_sectors(uint8_t first_sector, uint8_t num_of_sectors)
 static uint8_t flash_mass_erase(void);
 static uint8_t memory_write(uint32_t pmemory_address, uint8_t payload_len, uint8_t *payload);
 static uint8_t isFlash(bl_mem_type_t mem_type);
+static void configure_sectors_protection(uint8_t protected_sectors, uint8_t protection_mode);
 
 int main(void)
 {
@@ -673,8 +674,8 @@ static uint8_t isFlash(bl_mem_type_t mem_type)
 
 static uint8_t memory_write(uint32_t memory_address, uint8_t payload_len, uint8_t *payload)
 {
-	uint32_t *pmem_address;
-	uint32_t *pdata;
+//	uint32_t *pmem_address;
+//	uint32_t *pdata;
 	bl_mem_type_t mem_type;
 	uint8_t status = 0;
 
@@ -683,8 +684,8 @@ static uint8_t memory_write(uint32_t memory_address, uint8_t payload_len, uint8_
 	if((mem_type== BL_INVALID) || (payload_len == 0))
 		return BL_ERROR;
 
-	pmem_address = (uint32_t *)memory_address;
-	pdata = (uint32_t *)payload;
+//	pmem_address = (uint32_t *)memory_address;
+//	pdata = (uint32_t *)payload;
 
 	if(isFlash(mem_type)){
 #ifdef USE_FLASH_DRIVER
@@ -737,23 +738,117 @@ static uint8_t memory_write(uint32_t memory_address, uint8_t payload_len, uint8_
 
 void bl_enable_R_W_protect_cmd(uint8_t *pBuf)
 {
+	uint8_t protected_sectors;
+	uint8_t protection_mode;
+	uint8_t status = 0;
 
+	printmsg("BL_DEBUG_MSG: bl_enable_R_W_protect_cmd\r\n");
+
+	// Check CRC
+	if(!bl_command_CRC_check(pBuf)){
+		// CRC OK
+		printmsg("BL_DEBUG_MSG: CRC verification OK.\r\n");
+		bl_send_ACK(1);
+
+		protected_sectors = pBuf[2];
+		protection_mode = pBuf[3];
+
+		configure_sectors_protection(protected_sectors, protection_mode);
+		bl_uart_write_data(&status, 1);
+	}else{
+		// CRC corrupted
+		printmsg("BL_DEBUG_MSG: CRC verification failed.\r\n");
+		bl_send_NACK();
+	}
 }
+/*
+ *	each bit in protected_sectors correspond to a sector. Protection mode can be 1 (write protection)
+ *	or 2 (R/W protection)
+ */
+static void configure_sectors_protection(uint8_t protected_sectors, uint8_t protection_mode)
+{
+	// Unlock user option bytes
+	HAL_FLASH_OB_Unlock();
+//	FLASH->OPTKEYR = 0x08192A3B;
+//	FLASH->OPTKEYR = 0x4C5D6E7F;
+
+	// 1. Check that no flash memory operation is ongoing by checking the BSY bit in the FLASH_SR register
+	while(FLASH->SR & FLASH_SR_BSY);
+
+	// 2. Write the desired option value in the FLASH_OPTCR register.
+	if(protection_mode == 0){
+		// No protection -> SPRMOD = 0, nWRPi = 1
+		FLASH->OPTCR &= ~FLASH_OPTCR_SPRMOD;
+		FLASH->OPTCR &= ~(0xff << FLASH_OPTCR_nWRP_Pos);
+		FLASH->OPTCR |= (protected_sectors << FLASH_OPTCR_nWRP_Pos);
+	}else if(protection_mode == 1){
+		// Write protection -> SPRMOD = 0, nWRPi = 0
+		FLASH->OPTCR &= ~FLASH_OPTCR_SPRMOD;
+		FLASH->OPTCR |= (0xff << FLASH_OPTCR_nWRP_Pos);
+		FLASH->OPTCR &= ~(protected_sectors << FLASH_OPTCR_nWRP_Pos);
+	}else if(protection_mode == 2){
+		// R/W protection -> SPRMOD = 1, nWRPi = 1
+		FLASH->OPTCR |= FLASH_OPTCR_SPRMOD;
+		FLASH->OPTCR &= ~(0xff << FLASH_OPTCR_nWRP_Pos);
+		FLASH->OPTCR |= (protected_sectors << FLASH_OPTCR_nWRP_Pos);
+	}
+	// 3. Set the option start bit (OPTSTRT) in the FLASH_OPTCR register
+	FLASH->OPTCR |= FLASH_OPTCR_OPTSTRT;
+
+	// 4. Wait for the BSY bit to be cleared.
+	while(FLASH->SR & FLASH_SR_BSY);
+
+	// Lock user option bytes
+	HAL_FLASH_OB_Lock();
+//	FLASH->OPTCR |= FLASH_OPTCR_OPTLOCK;
+}
+
 void bl_mem_read_cmd(uint8_t *pBuf)
 {
 
 }
 void bl_read_sector_status_cmd(uint8_t *pBuf)
 {
+	uint16_t data;
 
+	printmsg("BL_DEBUG_MSG: bl_read_sector_status_cmd\r\n");
+
+	// Check CRC
+	if(!bl_command_CRC_check(pBuf)){
+		// CRC OK
+		printmsg("BL_DEBUG_MSG: CRC verification OK.\r\n");
+		bl_send_ACK(2);
+		data = (uint16_t)(FLASH->OPTCR >> 16);
+		bl_uart_write_data((uint8_t *)&data, 2);
+	}else{
+		// CRC corrupted
+		printmsg("BL_DEBUG_MSG: CRC verification failed.\r\n");
+		bl_send_NACK();
+	}
 }
+
 void bl_otp_read_cmd(uint8_t *pBuf)
 {
 
 }
 void bl_disable_R_W_protect_cmd(uint8_t *pBuf)
 {
+	uint8_t status = 0;
+	printmsg("BL_DEBUG_MSG: bl_disable_R_W_protect_cmd\r\n");
 
+	// Check CRC
+	if(!bl_command_CRC_check(pBuf)){
+		// CRC OK
+		printmsg("BL_DEBUG_MSG: CRC verification OK.\r\n");
+		bl_send_ACK(1);
+
+		configure_sectors_protection(0xff, 0);
+		bl_uart_write_data(&status, 1);
+	}else{
+		// CRC corrupted
+		printmsg("BL_DEBUG_MSG: CRC verification failed.\r\n");
+		bl_send_NACK();
+	}
 }
 
 uint8_t bl_get_version(void)

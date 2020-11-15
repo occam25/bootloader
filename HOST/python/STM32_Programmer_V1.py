@@ -515,11 +515,12 @@ def decode_menu_command_code(command):
             sector_details = sector_details | (1 << sector_numbers[x])
 
         #print("Sector details",sector_details)
+        print("\n   Mode:Flash sectors with no protection: 0")
         print("\n   Mode:Flash sectors Write Protection: 1")
         print("\n   Mode:Flash sectors Read/Write Protection: 2")
-        mode=input("\n   Enter Sector Protection Mode(1 or 2 ):")
+        mode=input("\n   Enter Sector Protection Mode(0, 1 or 2 ):")
         mode = int(mode)
-        if(mode != 2 and mode != 1):
+        if(mode != 2 and mode != 1 and mode != 0):
             printf("\n   Invalid option : Command Dropped")
             return
         if(mode == 2):
