@@ -31,8 +31,11 @@ extern "C" {
 #define BL_ACK		0xa5
 #define BL_NACK		0x7f
 
-#define ADDR_VALID			0
-#define ADDR_INVALID		1
+#define BL_ERROR		1
+#define BL_SUCCESS		0
+
+#define BL_TRUE			1
+#define BL_FALSE		0
 
 // Commands
 #define BL_GET_VER				0x51
@@ -57,6 +60,51 @@ extern "C" {
 #define FLASH_SIZE			512*1024    // STM32F446RE has 512KB of Flash
 #define BKPSRAM_SIZE		4*1024		// STM32F446RE has 4KB of backup SRAM
 #define BKPSRAM_END			(BKPSRAM_BASE + BKPSRAM_SIZE)
+
+#define BL_FLASH_SEC0_BASE		0x08000000UL
+#define BL_FLASH_SEC0_END		0x08003FFFUL	// Sector 0 size: 16KB
+#define BL_FLASH_SEC1_BASE		0x08004000UL
+#define BL_FLASH_SEC1_END		0x08007FFFUL	// Sector 1 size: 16KB
+#define BL_FLASH_SEC2_BASE		0x08008000UL
+#define BL_FLASH_SEC2_END		0x0800BFFFUL	// Sector 2 size: 16KB
+#define BL_FLASH_SEC3_BASE		0x0800C000UL
+#define BL_FLASH_SEC3_END		0x0800FFFFUL	// Sector 3 size: 16KB
+#define BL_FLASH_SEC4_BASE		0x08010000UL
+#define BL_FLASH_SEC4_END		0x0801FFFFUL	// Sector 4 size: 64KB
+#define BL_FLASH_SEC5_BASE		0x08020000UL
+#define BL_FLASH_SEC5_END		0x0803FFFFUL	// Sector 5 size: 128KB
+#define BL_FLASH_SEC6_BASE		0x08040000UL
+#define BL_FLASH_SEC6_END		0x0805FFFFUL	// Sector 6 size: 128KB
+#define BL_FLASH_SEC7_BASE		0x08060000UL
+#define BL_FLASH_SEC7_END		0x0807FFFFUL	// Sector 7 size: 128KB
+
+#define BL_FLASH_SYSMEM_BASE	0x1FFF0000UL
+#define BL_FLASH_SYSMEM_END		0x1FFF77FFUL	// System memory size: 30KB
+
+#define BL_FLASH_OTP_BASE		0x1FFF7800UL
+#define BL_FLASH_OTP_END		0x1FFF7A0FUL	// One time programming area size: 528B
+
+#define BL_FLASH_OPT_BASE		0x1FFFC000UL
+#define BL_FLASH_OPT_END		0x1FFFC00FUL	// Option bytes size: 16B
+
+typedef enum bl_mem_type_enum{
+	BL_SRAM1,
+	BL_SRAM2,
+	BL_FLASH_SEC0,
+	BL_FLASH_SEC1,
+	BL_FLASH_SEC2,
+	BL_FLASH_SEC3,
+	BL_FLASH_SEC4,
+	BL_FLASH_SEC5,
+	BL_FLASH_SEC6,
+	BL_FLASH_SEC7,
+	BL_FLASH_SYSMEM,
+	BL_FLASH_OTP,
+	BL_FLASH_OPT,
+	BL_BKPRAM,
+	BL_INVALID
+}bl_mem_type_t;
+
 
 void Error_Handler(void);
 

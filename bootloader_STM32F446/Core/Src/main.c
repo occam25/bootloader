@@ -42,9 +42,12 @@ void printmsg(char *format, ...);
 static uint8_t CRC_check(uint8_t *pData, uint32_t len, uint32_t crc_host);
 static uint16_t get_mcu_chip_id(void);
 static uint8_t get_flash_rpd(void);
-static uint8_t verify_address(uint32_t address);
+static uint8_t isExecutable(uint32_t address);
+static bl_mem_type_t verify_address(uint32_t address);
 static uint8_t flash_erase_sectors(uint8_t first_sector, uint8_t num_of_sectors);
 static uint8_t flash_mass_erase(void);
+static uint8_t memory_write(uint32_t pmemory_address, uint8_t payload_len, uint8_t *payload);
+static uint8_t isFlash(bl_mem_type_t mem_type);
 
 int main(void)
 {
@@ -408,7 +411,7 @@ void bl_go_to_address_cmd(uint8_t *pBuf)
 		bl_send_ACK(1);
 		goto_address = *((uint32_t *)(&pBuf[2]));
 		printmsg("BL_DEBUG_MSG: GOTO address: %#x\r\n", goto_address);
-		if(verify_address(goto_address) == ADDR_VALID){
+		if(isExecutable(goto_address) == BL_TRUE){
 			status = 1;
 			bl_uart_write_data(&status, 1);
 
@@ -436,7 +439,19 @@ void bl_go_to_address_cmd(uint8_t *pBuf)
 		bl_send_NACK();
 	}
 }
-static uint8_t verify_address(uint32_t address)
+
+static uint8_t isExecutable(uint32_t address)
+{
+	bl_mem_type_t mem_type;
+	mem_type = verify_address(address);
+
+	if((mem_type == BL_FLASH_OTP)||(mem_type == BL_FLASH_OPT)||(mem_type == BL_INVALID))
+		return BL_FALSE;
+
+	return BL_TRUE;
+}
+
+static bl_mem_type_t verify_address(uint32_t address)
 {
 	//so, what are the valid addresses to which we can jump ?
 	//can we jump to system memory ? yes
@@ -446,15 +461,35 @@ static uint8_t verify_address(uint32_t address)
 	//can we jump to peripheral memory ? its possible , but dont allow. so no
 	//can we jump to external memory ? yes.
 	if((address >= SRAM1_BASE)&&(address <= SRAM1_END)){
-		return ADDR_VALID;
+		return BL_SRAM1;
 	}else if((address >= SRAM2_BASE)&&(address <= SRAM2_END)){
-		return ADDR_VALID;
-	}else if((address >= FLASH_BASE)&&(address <= FLASH_END)){
-		return ADDR_VALID;
+		return BL_SRAM2;
+	}else if((address >= BL_FLASH_SEC0_BASE)&&(address <= BL_FLASH_SEC0_END)){
+		return BL_FLASH_SEC0;
+	}else if((address >= BL_FLASH_SEC1_BASE)&&(address <= BL_FLASH_SEC1_END)){
+		return BL_FLASH_SEC1;
+	}else if((address >= BL_FLASH_SEC2_BASE)&&(address <= BL_FLASH_SEC2_END)){
+		return BL_FLASH_SEC2;
+	}else if((address >= BL_FLASH_SEC3_BASE)&&(address <= BL_FLASH_SEC3_END)){
+		return BL_FLASH_SEC3;
+	}else if((address >= BL_FLASH_SEC4_BASE)&&(address <= BL_FLASH_SEC4_END)){
+		return BL_FLASH_SEC4;
+	}else if((address >= BL_FLASH_SEC5_BASE)&&(address <= BL_FLASH_SEC5_END)){
+		return BL_FLASH_SEC5;
+	}else if((address >= BL_FLASH_SEC6_BASE)&&(address <= BL_FLASH_SEC6_END)){
+		return BL_FLASH_SEC6;
+	}else if((address >= BL_FLASH_SEC7_BASE)&&(address <= BL_FLASH_SEC7_END)){
+		return BL_FLASH_SEC7;
+	}else if((address >= BL_FLASH_SYSMEM_BASE)&&(address <= BL_FLASH_SYSMEM_END)){
+		return BL_FLASH_SYSMEM;
+	}else if((address >= BL_FLASH_OTP_BASE)&&(address <= BL_FLASH_OTP_END)){
+		return BL_FLASH_OTP;
+	}else if((address >= BL_FLASH_OPT_BASE)&&(address <= BL_FLASH_OPT_END)){
+		return BL_FLASH_OPT;
 	}else if((address >= BKPSRAM_BASE)&&(address <= BKPSRAM_END)){
-		return ADDR_VALID;
+		return BL_BKPRAM;
 	}else
-		return ADDR_INVALID;
+		return BL_INVALID;
 }
 
 #define USE_FLASH_DRIVER
@@ -502,12 +537,12 @@ static uint8_t flash_erase_sectors(uint8_t first_sector, uint8_t num_of_sectors)
 
 	if(first_sector > 7){
 		printmsg("BL_DEBUG_MSG: Invalid sector (%d)\r\n", first_sector);
-		return 1;
+		return BL_ERROR;
 	}
 
 	if(num_of_sectors == 0){
 		printmsg("BL_DEBUG_MSG: Invalid number of sectors (%d)\r\n", num_of_sectors);
-		return 1;
+		return BL_ERROR;
 	}
 
 	if(num_of_sectors > 8 - first_sector)
@@ -598,8 +633,108 @@ static uint8_t flash_mass_erase(void)
 
 void bl_mem_write_cmd(uint8_t *pBuf)
 {
+	uint32_t memory_address;
+	uint8_t payload_len;
+	uint8_t *payload;
+	uint8_t status = 0;
 
+	printmsg("BL_DEBUG_MSG: bl_mem_write_cmd\r\n");
+
+	// Check CRC
+	if(!bl_command_CRC_check(pBuf)){
+		// CRC OK
+		printmsg("BL_DEBUG_MSG: CRC verification OK.\r\n");
+		bl_send_ACK(1);
+		memory_address = *((uint32_t *)&pBuf[2]);
+		payload_len = pBuf[6];
+		payload = &pBuf[7];
+
+		printmsg("BL_DEBUG_MSG: Writing %d byte(s) to memory address %#x\r\n", payload_len, memory_address);
+
+		HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
+		status = memory_write(memory_address, payload_len, payload);
+		HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+
+		bl_uart_write_data(&status, 1);
+	}else{
+		// CRC corrupted
+		printmsg("BL_DEBUG_MSG: CRC verification failed.\r\n");
+		bl_send_NACK();
+	}
 }
+
+static uint8_t isFlash(bl_mem_type_t mem_type)
+{
+	if(mem_type >= BL_FLASH_SEC0 && mem_type <= BL_FLASH_OPT)
+		return BL_TRUE;
+
+	return BL_FALSE;
+}
+
+static uint8_t memory_write(uint32_t memory_address, uint8_t payload_len, uint8_t *payload)
+{
+	uint32_t *pmem_address;
+	uint32_t *pdata;
+	bl_mem_type_t mem_type;
+	uint8_t status = 0;
+
+	mem_type = verify_address(memory_address);
+
+	if((mem_type== BL_INVALID) || (payload_len == 0))
+		return BL_ERROR;
+
+	pmem_address = (uint32_t *)memory_address;
+	pdata = (uint32_t *)payload;
+
+	if(isFlash(mem_type)){
+#ifdef USE_FLASH_DRIVER
+		HAL_FLASH_Unlock();
+		for(uint8_t i = 0; i < payload_len; i++){
+			status += HAL_FLASH_Program(FLASH_TYPEPROGRAM_BYTE, memory_address + i, payload[i]);
+		}
+		HAL_FLASH_Lock();
+#else
+
+		/********* Unlock Flash sequence ********/
+		// 1. Write KEY1 = 0x45670123 in the Flash key register (FLASH_KEYR)
+		FLASH->KEYR = 0x45670123;
+		// 2. Write KEY2 = 0xCDEF89AB in the Flash key register (FLASH_KEYR)
+		FLASH->KEYR = 0xCDEF89AB;
+
+		/********* Flash programming ********/
+		// Set x32 parallelism
+		FLASH->CR &= ~(0x03 << FLASH_CR_PSIZE_Pos);
+		FLASH->CR |= (0x02 << FLASH_CR_PSIZE_Pos);
+		// 1. Check that no flash memory operation is ongoing by checking the BSY bit in the FLASH_SR register
+		while(FLASH->SR & FLASH_SR_BSY);
+		// 2. Set the PG bit in the FLASH_CR register
+		FLASH->CR |= FLASH_CR_PG;
+		// 3. Perform the data write operation(s) to the desired memory address (inside main memory block or OTP area)
+		while(payload_len > 0){
+			*pmem_address = *pdata;
+			pmem_address++;
+			pdata++;
+			payload_len -= 4;
+		}
+		// 4. Wait for the BSY bit to be cleared
+		while(FLASH->SR & FLASH_SR_BSY);
+		/************* Lock flash **************/
+		// Lock the flash again: The FLASH_CR register can be locked again by software by setting the LOCK bit in the FLASH_CR register.
+		FLASH->CR |= FLASH_CR_LOCK;
+#endif
+	}else{
+		// memory type is SRAM
+//		while(payload_len > 0){
+//			*pmem_address = *pdata;
+//			pmem_address++;
+//			pdata++;
+//			payload_len -= 4;
+//		}
+	}
+
+	return status;
+}
+
 void bl_enable_R_W_protect_cmd(uint8_t *pBuf)
 {
 
