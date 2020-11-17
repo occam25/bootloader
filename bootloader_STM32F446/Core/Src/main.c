@@ -49,6 +49,7 @@ static uint8_t flash_mass_erase(void);
 static uint8_t memory_write(uint32_t pmemory_address, uint8_t payload_len, uint8_t *payload);
 static uint8_t isFlash(bl_mem_type_t mem_type);
 static void configure_sectors_protection(uint8_t protected_sectors, uint8_t protection_mode);
+static uint8_t memory_read(uint32_t address, uint8_t len);
 
 int main(void)
 {
@@ -413,7 +414,7 @@ void bl_go_to_address_cmd(uint8_t *pBuf)
 		goto_address = *((uint32_t *)(&pBuf[2]));
 		printmsg("BL_DEBUG_MSG: GOTO address: %#x\r\n", goto_address);
 		if(isExecutable(goto_address) == BL_TRUE){
-			status = 1;
+			status = BL_SUCCESS;
 			bl_uart_write_data(&status, 1);
 
             /*jump to "go" address.
@@ -429,7 +430,7 @@ void bl_go_to_address_cmd(uint8_t *pBuf)
 			printmsg("BL_DEBUG_MSG: Jumping to address: %#x\r\n", goto_address);
 			jump(); // In app code the reset handler is at 0x08008A50
 		}else{
-			status = 0;
+			status = BL_ERROR;
 			bl_uart_write_data(&status, 1);
 		}
 
@@ -805,8 +806,53 @@ static void configure_sectors_protection(uint8_t protected_sectors, uint8_t prot
 
 void bl_mem_read_cmd(uint8_t *pBuf)
 {
+	uint32_t memory_address;
+	uint8_t read_len;
+	uint8_t status = 0;
 
+	printmsg("BL_DEBUG_MSG: bl_mem_read_cmd\r\n");
+
+	// Check CRC
+	if(!bl_command_CRC_check(pBuf)){
+		// CRC OK
+		printmsg("BL_DEBUG_MSG: CRC verification OK.\r\n");
+
+		memory_address = *((uint32_t *)&pBuf[2]);
+		read_len = pBuf[6];
+
+		bl_send_ACK(read_len);
+
+		printmsg("BL_DEBUG_MSG: Reading %d byte(s) from memory address %#x\r\n", read_len, memory_address);
+
+		HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_SET);
+		status = memory_read(memory_address, read_len);
+		HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+
+		bl_uart_write_data(&status, 1);
+	}else{
+		// CRC corrupted
+		printmsg("BL_DEBUG_MSG: CRC verification failed.\r\n");
+		bl_send_NACK();
+	}
 }
+
+static uint8_t memory_read(uint32_t address, uint8_t len)
+{
+	uint8_t *pmem;
+
+	bl_mem_type_t mem_type = verify_address(address);
+
+	if(mem_type == BL_INVALID)
+		return BL_ERROR;
+
+	pmem = (uint8_t *)address;
+
+	for(uint8_t i = 0; i < len; i++)
+		bl_uart_write_data(&pmem[i], 1);
+
+	return BL_SUCCESS;
+}
+
 void bl_read_sector_status_cmd(uint8_t *pBuf)
 {
 	uint16_t data;

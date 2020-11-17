@@ -3,6 +3,7 @@ import struct
 import os
 import sys
 import glob
+import hexdump
 
 Flash_HAL_OK                                        = 0x00
 Flash_HAL_ERROR                                     = 0x01
@@ -35,6 +36,7 @@ COMMAND_BL_GO_TO_ADDR_LEN                           =10
 COMMAND_BL_FLASH_ERASE_LEN                          =8
 COMMAND_BL_MEM_WRITE_LEN                            = 11
 COMMAND_BL_EN_R_W_PROTECT_LEN                       =8
+COMMAND_BL_MEM_READ_LEN                             =11
 COMMAND_BL_READ_SECTOR_P_STATUS_LEN                 =6
 COMMAND_BL_DIS_R_W_PROTECT_LEN                      =6
 COMMAND_BL_MY_NEW_COMMAND_LEN                       =8
@@ -225,7 +227,19 @@ def process_COMMAND_BL_MEM_WRITE(length):
     else:
         print("\n   Write_status: UNKNOWN_ERROR")
     print("\n")
-    
+
+def process_COMMAND_BL_MEM_READ(length):
+    value = read_serial_port(length)
+    read_data = bytearray(value)
+
+    hexdump.hexdump(read_data)
+#    cnt = 0;
+#    for byte in read_data:
+#        print(" ", hex(byte))
+#        cnt = cnt + 1
+#        if cnt == 16:
+#            cnt = 0
+#            print("\n")
 
 def process_COMMAND_BL_FLASH_MASS_ERASE(length):
     pass
@@ -546,8 +560,35 @@ def decode_menu_command_code(command):
             
         
     elif(command == 10):
+        base_mem_address = input("\n   Enter the memory address to read from:")
+        base_mem_address = int(base_mem_address, 16)
+        num_of_bytes = input("\n   Enter the number of bytes you want to read (255 max):")
+        num_of_bytes = int(num_of_bytes)
+        if(num_of_bytes > 0xff):
+            num_of_bytes = 0xff
+        
         print("\n   Command == > COMMAND_BL_MEM_READ")
-        print("\n   This command is not supported")
+        data_buf[0] = COMMAND_BL_MEM_READ_LEN-1 
+        data_buf[1] = COMMAND_BL_MEM_READ 
+        data_buf[2] = word_to_byte(base_mem_address,1,1) 
+        data_buf[3] = word_to_byte(base_mem_address,2,1) 
+        data_buf[4] = word_to_byte(base_mem_address,3,1) 
+        data_buf[5] = word_to_byte(base_mem_address,4,1) 
+        data_buf[6] = num_of_bytes 
+
+        crc32       = get_crc(data_buf,COMMAND_BL_MEM_READ_LEN-4) 
+
+        data_buf[7] = word_to_byte(crc32,1,1) 
+        data_buf[8] = word_to_byte(crc32,2,1) 
+        data_buf[9] = word_to_byte(crc32,3,1) 
+        data_buf[10] = word_to_byte(crc32,4,1) 
+
+        Write_to_serial_port(data_buf[0],1)
+
+        for i in data_buf[1:COMMAND_BL_MEM_READ_LEN]:
+            Write_to_serial_port(i,COMMAND_BL_MEM_READ_LEN-1)
+
+        ret_value = read_bootloader_reply(data_buf[1])
     elif(command == 11):
         print("\n   Command == > COMMAND_BL_READ_SECTOR_P_STATUS")
         data_buf[0] = COMMAND_BL_READ_SECTOR_P_STATUS_LEN-1 
@@ -648,6 +689,9 @@ def read_bootloader_reply(command_code):
             elif(command_code) == COMMAND_BL_MEM_WRITE:
                 process_COMMAND_BL_MEM_WRITE(len_to_follow)
                 
+            elif(command_code) == COMMAND_BL_MEM_READ:
+                process_COMMAND_BL_MEM_READ(len_to_follow)
+
             elif(command_code) == COMMAND_BL_READ_SECTOR_P_STATUS:
                 process_COMMAND_BL_READ_SECTOR_STATUS(len_to_follow)
                 
